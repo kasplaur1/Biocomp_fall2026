@@ -21,6 +21,8 @@ PwmOut pwm_LED(P0_6); // PWMOut for chocolate (blue LED)
 
 // global variable
 volatile uint32_t ticker_count = 0;
+const uint32_t pwm_period = 10; // how many times ticker fires to complete one PWM cycle
+volatile uint32_t on_counts = 8; // how many of the pwm_period that the LED should be ON
 
 // Ticker
 Ticker pwm_ticker;
@@ -34,16 +36,29 @@ Thread strawberryThread;
 // determine how long to keep the ticker on/off
  void ticker_function(){
     ticker_count++;
+
+    // once ticker_count reaches 20, reset to 0 to creeate repeating cycle
+    if(ticker_count >= pwm_period){
+        ticker_count = 0;
+    }
+
+    // LED ON VS LED OFF
+    if(ticker_count < on_counts){
+        OUTCLR = LEDG;
+    }
+    else{
+        OUTSET = LEDG;
+    }
 }
 
 // Producter generates cycle and pushes them into the queue
 void producer_thread(){
     DIRCLR = LEDG | LEDB | LEDR; // turn off all LEDS
     while(1){
-        Cycle* d1 = duty_pool.alloc();
+        Cycle* d1 = duty_pool.alloc(); // allocate cycle from memorypool
         if (d1 != nullptr){
-            d1->percent = 0.33f; // brightness
-            duty_queue.put(d1);
+            d1->percent = 0.33f; // set duty cycle to 33%
+            duty_queue.put(d1); // put cycle into queue
         }
         thread_sleep_for(1000);// send new duty cycle once per second
     }
@@ -52,37 +67,16 @@ void producer_thread(){
 // Vanilla PWM manual toggle for LEDG on/off
 void vanilla_thread(){
     DIRSET = LEDG;
-    float duty = 0.33f; // brightness
-    int32_t pwm_period = 3;
+    float duty;
 
     while(1){
         Cycle *msg = nullptr;
         if(duty_queue.try_get(&msg)){
             if(msg != nullptr){
                 duty = msg->percent;
+                on_counts = (uint32_t)(pwm_period * duty); // converts duty cycle into ON counts
                 duty_pool.free(msg);
             }
-        }
-        
-        uint32_t on_time = (uint32_t)(pwm_period * duty);
-        uint32_t off_time = (pwm_period - on_time);
-
-        //LED ON
-        OUTCLR = LEDG;
-
-        uint32_t start = ticker_count;
-
-        while((ticker_count - start) < on_time){
-            // wait for ticker to advance
-        }
-
-        //LED OFF
-
-        OUTSET = LEDG;
-        start = ticker_count;
-
-        while((ticker_count - start) < off_time){
-            //wait for ticker to advance
         }
    }
 }

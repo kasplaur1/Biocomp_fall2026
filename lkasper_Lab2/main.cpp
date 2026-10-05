@@ -86,98 +86,102 @@ void send_duty(Queue<Cycle, 9>& queue, MemoryPool<Cycle, 9>& pool, float percent
     }
 }
 
+
 //producer for part 3 - combining them all together
-void producer_thread(){
-
+void producer_thread()
+{
     DIRSET = LEDG | LEDB | LEDR;
+    OUTSET = LEDG | LEDB | LEDR;
 
-    while(1){
+    int green_step = 0;
+    int blue_step = 0;
+    int red_step = 0;
 
-        // =========================
-        // GREEN - 2 seconds
-        // slow - 33%
-        // =========================
+    while (1)
+    {
+        // --------------------------------
+        // GREEN
+        // Slow glow
+        // Maximum brightness = 33%
+        // --------------------------------
 
-        for(int i = 0; i <= 20; i++){
+        float green_duty;
 
-            float duty = 0.33f * ((float)i / 20.0f);
-
-            send_duty(green_queue, green_pool, duty);
-            send_duty(blue_queue, blue_pool, 0.0f);
-            send_duty(red_queue, red_pool, 0.0f);
-
-            thread_sleep_for(50);
+        if (green_step < 100)
+        {
+            green_duty = 0.33f * ((float)green_step / 100.0f);
         }
-
-        for(int i = 20; i >= 0; i--){
-
-            float duty = 0.33f * ((float)i / 20.0f);
-
-            send_duty(green_queue, green_pool, duty);
-            send_duty(blue_queue, blue_pool, 0.0f);
-            send_duty(red_queue, red_pool, 0.0f);
-
-            thread_sleep_for(50);
+        else
+        {
+            green_duty = 0.33f *
+                ((float)(200 - green_step) / 100.0f);
         }
 
 
-        // =========================
-        // BLUE - 2 seconds
-        // medium - 75%
-        // =========================
+        // --------------------------------
+        // BLUE
+        // Medium glow
+        // Maximum brightness = 75%
+        // --------------------------------
 
-        for(int i = 0; i <= 20; i++){
+        float blue_duty;
 
-            float duty = 0.75f * ((float)i / 20.0f);
-
-            send_duty(green_queue, green_pool, 0.0f);
-            send_duty(blue_queue, blue_pool, duty);
-            send_duty(red_queue, red_pool, 0.0f);
-
-            thread_sleep_for(50);
+        if (blue_step < 50)
+        {
+            blue_duty = 0.75f * ((float)blue_step / 50.0f);
         }
-
-        for(int i = 20; i >= 0; i--){
-
-            float duty = 0.75f * ((float)i / 20.0f);
-
-            send_duty(green_queue, green_pool, 0.0f);
-            send_duty(blue_queue, blue_pool, duty);
-            send_duty(red_queue, red_pool, 0.0f);
-
-            thread_sleep_for(50);
+        else
+        {
+            blue_duty = 0.75f *
+                ((float)(100 - blue_step) / 50.0f);
         }
 
 
-        // =========================
-        // RED - 2 seconds
-        // fast - 50%
-        // =========================
+        // --------------------------------
+        // RED
+        // Fast glow
+        // Maximum brightness = 50%
+        // --------------------------------
 
-        for(int i = 0; i <= 40; i++){
+        float red_duty;
 
-            float duty = 0.50f * ((float)i / 40.0f);
-
-            send_duty(green_queue, green_pool, 0.0f);
-            send_duty(blue_queue, blue_pool, 0.0f);
-            send_duty(red_queue, red_pool, duty);
-
-            thread_sleep_for(25);
+        if (red_step < 25)
+        {
+            red_duty = 0.50f * ((float)red_step / 25.0f);
+        }
+        else
+        {
+            red_duty = 0.50f *
+                ((float)(50 - red_step) / 25.0f);
         }
 
-        for(int i = 40; i >= 0; i--){
 
-            float duty = 0.50f * ((float)i / 40.0f);
+        // Send ALL THREE simultaneously
+        send_duty(green_queue, green_pool, green_duty);
+        send_duty(blue_queue, blue_pool, blue_duty);
+        send_duty(red_queue, red_pool, red_duty);
 
-            send_duty(green_queue, green_pool, 0.0f);
-            send_duty(blue_queue, blue_pool, 0.0f);
-            send_duty(red_queue, red_pool, duty);
 
-            thread_sleep_for(25);
-        }
+        // Advance each LED independently
+        green_step++;
+        blue_step++;
+        red_step++;
+
+
+        // Repeat each glow cycle
+        if (green_step >= 200)
+            green_step = 0;
+
+        if (blue_step >= 100)
+            blue_step = 0;
+
+        if (red_step >= 50)
+            red_step = 0;
+
+
+        thread_sleep_for(10);
     }
 }
-
 
 
 /*
@@ -202,7 +206,7 @@ void vanilla_thread(){
 // part 3 vanilla: same just change queues
 void vanilla_thread(){
     DIRSET = LEDG;
-    float duty;
+    float duty = 0.0f;
 
     while(1){
         Cycle *msg = nullptr;
@@ -214,8 +218,6 @@ void vanilla_thread(){
             }
         }
 
-        //make consumers drain queue down to newest message
-        on_counts = (uint32_t)(pwm_period * duty);
         thread_sleep_for(1);
    }
 }
@@ -243,12 +245,12 @@ void chocolate_thread(){
 
 // part 3 chocolate: change queues
 void chocolate_thread(){
-    float duty;
+    float duty = 0.0f;
 
     while(1){
         Cycle *msg = nullptr;
         
-        if(blue_queue.try_get_for(10ms, &msg)){
+        if(blue_queue.try_get(&msg)){
             if(msg != nullptr){
                 duty = msg->percent;
                 //on_counts = (uint32_t)(pwm_period * duty); // converts duty cycle to ON counts
@@ -341,7 +343,7 @@ void strawberry_thread(){
         2000
     );
 
-    float duty;
+    float duty = 0.0f;
 
     static uint16_t pwm_value; // PMW must stay inram so use static, cause hardware reads it
     static nrf_pwm_sequence_t seq;// two sequences for continuous looping structure
@@ -349,7 +351,7 @@ void strawberry_thread(){
     while(1){
         Cycle *msg = nullptr;
 
-        if(red_queue.try_get_for(10ms, &msg)){
+        if(red_queue.try_get(&msg)){
             if(msg != nullptr){
                 duty = msg->percent;
                 red_pool.free(msg);

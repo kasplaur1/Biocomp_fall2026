@@ -55,10 +55,10 @@ Thread strawberryThread;
 void producer_thread(){
     DIRCLR = LEDG | LEDB | LEDR; // turn off all LEDS
     while(1){
-        Cycle* d1 = duty_pool.alloc(); // allocate cycle from memorypool
+        Cycle* d1 = duty_pool.try_alloc(); // allocate cycle from memorypool
         if (d1 != nullptr){
-            d1->percent = 0.33f; // set duty cycle to 33%
-            duty_queue.put(d1); // put cycle into queue
+            d1->percent = 0.50f; // set duty cycle to 33%
+            duty_queue.try_put(d1); // put cycle into queue
         }
         thread_sleep_for(1000);// send new duty cycle once per second
     }
@@ -71,7 +71,7 @@ void vanilla_thread(){
 
     while(1){
         Cycle *msg = nullptr;
-        if(duty_queue.try_get(&msg)){
+        if(duty_queue.try_get_for(10ms, &msg)){
             if(msg != nullptr){
                 duty = msg->percent;
                 on_counts = (uint32_t)(pwm_period * duty); // converts duty cycle into ON counts
@@ -83,36 +83,35 @@ void vanilla_thread(){
 
 //chocolate PWM has LEDB use out class
 void chocolate_thread(){
-    pwm_LED.period_ms(2);
-    float duty = 0.75f;
+    float duty;
 
     while(1){
         Cycle *msg = nullptr;
         
-        if(duty_queue.try_get(&msg)){
+        if(duty_queue.try_get_for(10ms, &msg)){
             if(msg != nullptr){
                 duty = msg->percent;
+                on_counts = (uint32_t)(pwm_period * duty); // converts duty cycle to ON counts
                 duty_pool.free(msg);
             }
         }
 
         pwm_LED.write(duty); // cycle to PWM hardware
-        thread_sleep_for(10); //sleep for 5ms
     }
 }
 
 // strawberry PWM has LEDR use PWM hardware
 void strawberry_thread(){
     uint32_t pwm_pins[4] = {
-        24,
+        27,
         NRF_PWM_PIN_NOT_CONNECTED,
         NRF_PWM_PIN_NOT_CONNECTED,
         NRF_PWM_PIN_NOT_CONNECTED
     };
 
     nrf_pwm_pins_set(NRF_PWM0, pwm_pins);
-    DIRSET = LEDB;
-    OUTSET = LEDB;
+    DIRSET = LEDR;
+    OUTSET = LEDR;
 
     nrf_pwm_configure(
         NRF_PWM0,
@@ -121,7 +120,7 @@ void strawberry_thread(){
         2000
     );
 
-    float duty = 0.50f;
+    float duty;
 
     static uint16_t pwm_value; // PMW must stay inram so use static, cause hardware reads it
     static nrf_pwm_sequence_t seq;// two sequences for continuous looping structure
@@ -144,16 +143,10 @@ void strawberry_thread(){
         seq.repeats = 0;
         seq.end_delay = 0;
 
-        //put same sequence into sequence registers
-        nrf_pwm_sequence_set(NRF_PWM0, 0, &seq);
-        nrf_pwm_sequence_set(NRF_PWM0, 1, &seq);
-
-        //repeat pattern
-        nrf_pwm_loop_set(NRF_PWM0, 1);
-
-        nrf_pwm_shorts_set(
+        nrf_pwm_sequence_set(
             NRF_PWM0,
-            NRF_PWM_SHORT_LOOPSDONE_SEQSTART0_MASK
+            0,
+            &seq
         );
 
         nrf_pwm_enable(NRF_PWM0);
@@ -174,9 +167,9 @@ int main()
 
     pwm_ticker.attach(&ticker_function, 2ms);
     producerThread.start(producer_thread);
-    vanillaThread.start(vanilla_thread);
+    //vanillaThread.start(vanilla_thread);
     //chocolateThread.start(chocolate_thread);
-    //strawberryThread.start(strawberry_thread);
+    strawberryThread.start(strawberry_thread);
 
     while(1){
         thread_sleep_for(1000); //keep main alive forever  else stop all threads

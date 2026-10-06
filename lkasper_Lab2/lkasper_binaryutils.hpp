@@ -14,8 +14,6 @@ Overview:
 #define LEDG (1 << 16)     //Green LED P0.16 
 #define LEDB (1 << 6)      //Blue LED P0.06 
 
-#define vanilla_o (1 << 27); // output 
-
 #define OUTSET (*(volatile uint32_t*)0x50000508)
 #define OUTCLR (*(volatile uint32_t*)0x5000050C)
 #define DIRSET (*(volatile uint32_t*)0x50000518)

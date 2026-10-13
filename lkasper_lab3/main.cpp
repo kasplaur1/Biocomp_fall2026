@@ -56,108 +56,69 @@ void ticker_thread(){
 
 //read humidity and temperature from HS3000
 // returns true when value measurement recieved
-
-bool read_hs3000(float &humidity, float &temperature)
+bool read_hs3000(int humidity, int temperature)
 {
     char data[4] = {0, 0, 0, 0};
     int result;
 
-    // Keep the complete measurement sequence together.
-    // Both threads share the same sensor.
     i2c_mutex.lock();
-
-    // STEP 1: Request a measurement
-    result = i2c.write(HS3000_ADDR, nullptr, 0);
+    result = i2c.write(HS3000_ADDR, nullptr, 0); // request a measurement from the i2c bus
 
     if (result != 0) {
         i2c_mutex.unlock();
-
         mutex.lock();
-        serial.printf("ERROR: I2C write failed: %d\r\n", result);
+        serial.printf("ERROR: I2C write failed: %d\r\n", result); // the i2c did not write a message back
         mutex.unlock();
-
         return false;
     }
 
-    // STEP 2: Wait for the sensor to finish measuring
-    thread_sleep_for(35);
-
-    // STEP 3: Read the four response bytes
-    result = i2c.read(HS3000_ADDR, data, 4);
-
+    thread_sleep_for(35); // wait for the sensor to capture the measuring
+    result = i2c.read(HS3000_ADDR, data, 4); // read the 4 bits for response
     i2c_mutex.unlock();
 
     if (result != 0) {
         mutex.lock();
-        serial.printf("ERROR: I2C read failed: %d\r\n", result);
+        serial.printf("ERROR: I2C read failed: %d\r\n", result); // i2c did not read the message
         mutex.unlock();
-
         return false;
     }
 
-    // STEP 4: Convert bytes to unsigned values
-    unsigned char b0 = (unsigned char)data[0];
-    unsigned char b1 = (unsigned char)data[1];
-    unsigned char b2 = (unsigned char)data[2];
-    unsigned char b3 = (unsigned char)data[3];
+    // Convert bytes to unsigned values
+    unsigned char b0 = data[0];
+    unsigned char b1 = data[1];
+    unsigned char b2 = data[2];
+    unsigned char b3 = data[3];
 
     // Print raw data for debugging
     mutex.lock();
     serial.printf("Raw data: %02X %02X %02X %02X\r\n", b0, b1, b2, b3);
     mutex.unlock();
 
-    // STEP 5: Check measurement status
-    unsigned int status = (b0 >> 6) & 0x03;
+    unsigned int status = (b0 >> 6) & 0x03; // Check measurement status
 
     if (status != 0) {
         mutex.lock();
-        serial.printf("ERROR: Invalid sensor status: %u\r\n",
-                      status);
+        serial.printf("ERROR: Invalid sensor status: %u\r\n", status); // status was empty, error
         mutex.unlock();
-
         return false;
     }
 
-    // STEP 6: Extract 14-bit humidity value
-    unsigned int raw_humidity =
-        (((unsigned int)(b0 & 0x3F)) << 8) |
-        (unsigned int)b1;
+    unsigned int raw_humidity = ((b0 & 0x3F) << 8) | b1; // extract 14-bit humidity value
+    unsigned int raw_temperature = ((b2 << 8) | b3) >> 2; // extract 1-bit temperature value
 
-    // STEP 7: Extract 14-bit temperature value
-    unsigned int raw_temperature =
-        ((((unsigned int)b2 << 8) |
-          (unsigned int)b3) >> 2);
+    humidity = (raw_humidity * 100) / 16383;  // Convert raw measurements to physical units 
+    temperature = (raw_temperature  * 297) / 16383 - 40; // Convert the 14-bit raw temperature to Fahrenheiet
 
-    
-    // STEP 8: Convert raw measurements to physical units
-    humidity =
-        ((float)raw_humidity / 16383.0f) * 100.0f;
-
-    // Convert the 14-bit raw temperature to Celsius
-    temperature =
-        ((float)raw_temperature / 16383.0f) * 165.0f - 40.0f;
-
-    // Convert Celsius to Fahrenheit
-    temperature = (temperature * 9.0f / 5.0f) + 32.0f;
-
-
-    // STEP 9: Confirm successful measurement
-   
     mutex.lock();
-    int humidity_x100 = (int)(humidity * 100.0f);
-    int temperature_x100 = (int)(temperature * 100.0f);
-
-    serial.printf("Humidity: %d.%02d %%\r\n", humidity_x100 / 100, abs(humidity_x100 % 100));
-    serial.printf("Temperature: %d.%02d F\r\n", temperature_x100 / 100, abs(temperature_x100 % 100));
+    serial.printf("Humidity: %d%%\r\n", humidity);
+    serial.printf("Temperature: %d F\r\n", temperature);
     mutex.unlock();
-
     return true;
+
 }
 
 
 //humidity thread
-
-
 void read_humidity()
 {
     mutex.lock();
@@ -165,18 +126,11 @@ void read_humidity()
     mutex.unlock();
 
     while (1) {
-        // Wait for the humidity event
-        flag.wait_any(HUMIDITY);
+        flag.wait_any(HUMIDITY); // Wait for the humidity event
+        humidity_led = 1;  // Turn on the red humidity LED
 
-        // Turn on the red humidity LED
-        humidity_led = 1;
-
-        float humidity_value = 0.0f;
-        float temperature_value = 0.0f;
-
-        mutex.lock();
-        serial.printf("Reading humidity...\r\n");
-        mutex.unlock();
+        int humidity_value = 0;
+        int temperature_value = 0;
 
         // Read the HS3000 sensor
         if (!read_hs3000(humidity_value, temperature_value)) {
@@ -185,11 +139,8 @@ void read_humidity()
             mutex.unlock();
         }
 
-        // Keep the LED on briefly
-        thread_sleep_for(200);
-
-        // Turn off the red humidity LED
-        humidity_led = 0;
+        thread_sleep_for(200); // Keep the LED on briefly
+        humidity_led = 0; // Turn off the red humidity LED
     }
 }
 
@@ -203,10 +154,6 @@ void read_temperature(){
 
     while(1){
         flag.wait_any(TEMPERATURE); //wait until TEMPERATURE is set
-        
-        mutex.lock();
-        serial.printf("Temperature event recieved\r\n");
-        mutex.unlock();
 
         temperature_led = 1;
         thread_sleep_for(200);
@@ -218,17 +165,10 @@ void read_temperature(){
 // main() runs in its own thread in the OS
 int main()
 {
-    // Enable the I2C bus pull-ups
-    i2c_pullup = 1;
-
-    // Power up the onboard sensors
-    hs_power = 1;
-
-    // Configure I2C speed
-    i2c.frequency(100000);
-
-    // Allow sensors to power up
-    thread_sleep_for(1000);
+    i2c_pullup = 1; // Enable the I2C bus pull-ups
+    hs_power = 1; // Power up the onboard sensors
+    i2c.frequency(100000); // Configure I2C speed
+    thread_sleep_for(1000); // Allow sensors to power up
 
     mutex.lock();
     serial.printf("Lab 3 started\r\n");
@@ -236,7 +176,6 @@ int main()
 
     humidity_thread.start(read_humidity);
     temperature_thread.start(read_temperature);
-
     ticker.attach(&ticker_thread, 1s);
 
     while (1) {

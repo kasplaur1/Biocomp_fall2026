@@ -103,8 +103,7 @@ bool read_hs3000(float &humidity, float &temperature)
 
     // Print raw data for debugging
     mutex.lock();
-    serial.printf("Raw data: %02X %02X %02X %02X\r\n",
-                  b0, b1, b2, b3);
+    serial.printf("Raw data: %02X %02X %02X %02X\r\n", b0, b1, b2, b3);
     mutex.unlock();
 
     // STEP 5: Check measurement status
@@ -129,17 +128,27 @@ bool read_hs3000(float &humidity, float &temperature)
         ((((unsigned int)b2 << 8) |
           (unsigned int)b3) >> 2);
 
+    
     // STEP 8: Convert raw measurements to physical units
     humidity =
         ((float)raw_humidity / 16383.0f) * 100.0f;
 
+    // Convert the 14-bit raw temperature to Celsius
     temperature =
         ((float)raw_temperature / 16383.0f) * 165.0f - 40.0f;
 
+    // Convert Celsius to Fahrenheit
+    temperature = (temperature * 9.0f / 5.0f) + 32.0f;
+
+
     // STEP 9: Confirm successful measurement
+   
     mutex.lock();
-    serial.printf("Humidity: %.2f %%RH\r\n", humidity);
-    serial.printf("Temperature: %.2f C\r\n", temperature);
+    int humidity_x100 = (int)(humidity * 100.0f);
+    int temperature_x100 = (int)(temperature * 100.0f);
+
+    serial.printf("Humidity: %d.%02d %%\r\n", humidity_x100 / 100, abs(humidity_x100 % 100));
+    serial.printf("Temperature: %d.%02d F\r\n", temperature_x100 / 100, abs(temperature_x100 % 100));
     mutex.unlock();
 
     return true;
@@ -148,6 +157,7 @@ bool read_hs3000(float &humidity, float &temperature)
 
 //humidity thread
 
+
 void read_humidity()
 {
     mutex.lock();
@@ -155,8 +165,10 @@ void read_humidity()
     mutex.unlock();
 
     while (1) {
+        // Wait for the humidity event
         flag.wait_any(HUMIDITY);
 
+        // Turn on the red humidity LED
         humidity_led = 1;
 
         float humidity_value = 0.0f;
@@ -166,21 +178,21 @@ void read_humidity()
         serial.printf("Reading humidity...\r\n");
         mutex.unlock();
 
-        if (read_hs3000(humidity_value, temperature_value)) {
-            mutex.lock();
-            serial.printf("Humidity: %.2f %%RH\r\n",
-                          humidity_value);
-            mutex.unlock();
-        } else {
+        // Read the HS3000 sensor
+        if (!read_hs3000(humidity_value, temperature_value)) {
             mutex.lock();
             serial.printf("Humidity measurement failed\r\n");
             mutex.unlock();
         }
 
+        // Keep the LED on briefly
         thread_sleep_for(200);
+
+        // Turn off the red humidity LED
         humidity_led = 0;
     }
 }
+
 
 
 //temperature thread
@@ -199,32 +211,7 @@ void read_temperature(){
         temperature_led = 1;
         thread_sleep_for(200);
         temperature_led = 0;
-/*
-        temperature_led = 1; // turn LEDG on
-
-        float humidity_value = 0.0f;
-        float temperature_value = 0.0f;
-
-        mutex.lock();
-        serial.printf("starting sensor read\r\n");
-        mutex.unlock();
-
-        if(read_hs3000(humidity_value, temperature_value)){
-            mutex.lock();
-            serial.printf("reading temperature: %.2f C\r\n", temperature_value);
-            mutex.unlock(); 
-        }
-        else{
-            mutex.lock();
-            serial.printf("failed reading temperature\r\n");
-            mutex.unlock();
-        }
-
-        serial.printf("sensor read finished\r\n");
-        thread_sleep_for(200); // thread stays on for 1 second
-        temperature_led = 0; // turn LEDG off
-        serial.printf("temperature LED turned off\r\n");
-    }*/}
+    }
 }
 
 

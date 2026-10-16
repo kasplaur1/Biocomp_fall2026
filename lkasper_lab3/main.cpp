@@ -11,21 +11,22 @@ Overview:
 #include "header.hpp"
 #include "USBSerial.h"
 
+//HS3000 sensor I2C address (7-bit address is 0x44, shifted for Mbeds API)
 #define HS3000_ADDR (0x44 << 1) // HS3000 default 7-but address is 0x44
-#define SDA_PIN P0_14
-#define SCL_PIN P0_15
+#define SDA_PIN P0_14 // pin definitions
+#define SCL_PIN P0_15 // pin definitions
 
-//event flags
+//event flags -> used to signal humidity or temperature tasks
 #define HUMIDITY (1 << 0) // pin 0
 #define TEMPERATURE (1 << 1) // pin 1
 
-I2C i2c(SDA_PIN, SCL_PIN); // you still need to figure these out
+I2C i2c(SDA_PIN, SCL_PIN); // I2C interface object
 DigitalOut hs_power(P0_22); // sensor power control (HS3003 VDD/VDDIO via P0.22)
-DigitalOut i2c_pullup(P1_0);  // I2C pull-up control
+DigitalOut i2c_pullup(P1_0);  // I2C pull-up control for bus
 
 USBSerial serial;
 EventFlags flag;
-Mutex mutex;
+Mutex mutex; // protects serial printing
 Mutex i2c_mutex; // protects i2c transactions
 
 PwmOut  humidity_led(P0_24); //red LED  
@@ -33,14 +34,15 @@ PwmOut  temperature_led(P0_16); // green LED
 
 // Ticker
 Ticker ticker;
-Thread humidity_thread;
-Thread temperature_thread;
+Thread humidity_thread; // worker thread
+Thread temperature_thread; // worker thread
 
 // Global Variable
 volatile uint32_t ticker_count = 0;
 volatile bool humidity_trigger = true; // alternate between humidity & temperature
 
-//ticker thread
+//ticker thread ISR triggered by the ticker every 1 second
+// Alternates between humidity and temperature events
 void ticker_thread(){
     ticker_count++;
 
@@ -61,8 +63,8 @@ bool read_hs3000(int humidity, int temperature)
     char data[4] = {0, 0, 0, 0};
     int result;
 
-    i2c_mutex.lock();
-    result = i2c.write(HS3000_ADDR, nullptr, 0); // request a measurement from the i2c bus
+    i2c_mutex.lock(); // protects I2C bus from concurrent access 
+    result = i2c.write(HS3000_ADDR, nullptr, 0); // request a measurement from the i2c bus (write with not data)
 
     if (result != 0) {
         i2c_mutex.unlock();
@@ -83,7 +85,7 @@ bool read_hs3000(int humidity, int temperature)
         return false;
     }
 
-    // Convert bytes to unsigned values
+    // Convert bytes to unsigned values/ extract raw bytes
     unsigned char b0 = data[0];
     unsigned char b1 = data[1];
     unsigned char b2 = data[2];
@@ -94,7 +96,7 @@ bool read_hs3000(int humidity, int temperature)
     serial.printf("Raw data: %02X %02X %02X %02X\r\n", b0, b1, b2, b3);
     mutex.unlock();
 
-    unsigned int status = (b0 >> 6) & 0x03; // Check measurement status
+    unsigned int status = (b0 >> 6) & 0x03; // Check measurement status to see if valid
 
     if (status != 0) {
         mutex.lock();
@@ -126,7 +128,7 @@ void read_humidity()
     mutex.unlock();
 
     while (1) {
-        flag.wait_any(HUMIDITY); // Wait for the humidity event
+        flag.wait_any(HUMIDITY); // Wait for the humidity event from ISR ticker
         humidity_led = 1;  // Turn on the red humidity LED
 
         int humidity_value = 0;
@@ -179,7 +181,7 @@ int main()
     ticker.attach(&ticker_thread, 1s);
 
     while (1) {
-        thread_sleep_for(1000);
+        thread_sleep_for(1000); // idle loop, keeps programming running
     }
 }
 

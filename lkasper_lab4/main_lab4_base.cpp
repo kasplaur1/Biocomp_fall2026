@@ -30,6 +30,7 @@ USBSerial ser;
 
 Thread tempthread;
 
+// BLE event queue
 static events::EventQueue event_queue(16 * EVENTS_EVENT_SIZE);
 
 // Your BLE instance
@@ -64,31 +65,70 @@ using namespace ble;
 /**
  * Event handler struct. Handle Bluetooth GAP events LK changed
  */
-struct GapEventHandler : Gap::EventHandler{
+struct GapEventHandler : Gap::EventHandler {
     /* 
 	 * Implement the functions here that you think you'll need. These are defined in the GAP EventHandler:
      * https://os.mbed.com/docs/mbed-os/v6.6/mbed-os-api-doxy/structble_1_1_gap_1_1_event_handler.html
      */
-    void onAdvertisingStart(const ble::AdvertisingStartEvent &event){
+
+    void onAdvertisingStart(const ble::AdvertisingStartEvent &event) override {
         // run when advertising starts
-        ser.printf("Bluetooth advertising start status: %d\n\r", event.getStatus());
+        ser.printf("Bluetooth advertising start status: %d\r\n", event.getStatus());
     }
 
-    void onAdvertisingEnd(const ble::AdvertisingEndEvent &event){
+    void onAdvertisingEnd(const ble::AdvertisingEndEvent &event) override {
         // run when advertising ends
-        ser.printf("Bluetooth advertising end status: %d\r\n", event.getStatus());
+        ser.printf("Bluetooth advertising ended. Status: %d\r\n", event.getStatus());
+
+        // advertising can end because a device connects, it times out, or it is stopped
+        ser.printf("Check the connection message above to see if a device connected.\r\n");
     }
 
-    void onScanRequestRecieved(const ScanRequestEvent &event){
-        // run whena device sends a scan request
-        ser.printf("A device requested advertising information\n\r");
+    void onConnectionComplete(const ble::ConnectionCompleteEvent &event) override {
+        // run when a Bluetooth connection attempt finishes
+
+        if (event.getStatus() == BLE_ERROR_NONE) {
+            ser.printf("SUCCESS: Bluetooth device connected!\r\n");
+        }
+        else {
+            ser.printf("Bluetooth connection failed: %d\r\n", event.getStatus());
+        }
+    }
+
+    void onScanRequestReceived(const ble::ScanRequestEvent &event) override {
+        // run when a device sends a scan request
+        ser.printf("A device requested advertising information\r\n");
     }
 };
 
 
 GapEventHandler THE_gap_EvtHandler; // create the event handler object
 
+//LK added
+// Update the temperature characteristic through the BLE event queue
+void update_temperature_characteristic(int16_t newTemperature) {
 
+    ble_error_t result = gattServe.write( // update the characteristic in the GATT server
+        temperatureCharacteristic.getValueHandle(), // get the temperature characteristic handle
+        reinterpret_cast<const uint8_t*>(&newTemperature), // provide the new temperature value
+        sizeof(newTemperature), // send the temperature value size
+        false // allow subscribed devices to receive indications
+    );
+
+    if (result == BLE_ERROR_NONE) {
+        ser.printf("BLE temperature characteristic updated: %d.%02d F\r\n",
+            newTemperature / 100,
+            (newTemperature % 100 < 0) ? -(newTemperature % 100) : (newTemperature % 100)); // print updated BLE temperature
+    }
+    else {
+        ser.printf("Failed to update BLE characteristic: %d\r\n", result); // print update error
+    }
+}
+// LK done
+
+
+
+// read the temperature and humidity from the Hs3000 sensor
 void measure_temp(){
     I2C sensor_bus(I2C_SDA1, I2C_SCL1);
 
@@ -157,17 +197,27 @@ void measure_temp(){
             continue; // Skip this reading if the I2C read failed
         }
 
-        ser.printf("Status bits: %d\n\r", (readData[0] >> 6)); // Print sensor status bits
+        ser.printf("Status bits: %d\r\n", (static_cast<uint8_t>(readData[0]) >> 6)); // print sensor status bits
+        humidity = ((static_cast<uint8_t>(readData[0]) & 0x3F) << 8) | static_cast<uint8_t>(readData[1]); // calculate raw humidity
+        ser.printf("Humidity %%: %u\r\n", (humidity * 100 / 16383)); // print humidity percentage
+        uint16_t rawTemp = ((((uint16_t)(uint8_t)readData[2] << 8) | (uint8_t)readData[3]) >> 2); // extract the 14-bit temperature value
+        ser.printf("Raw bytes: %02X %02X %02X %02X\r\n",
+            (uint8_t)readData[0],
+            (uint8_t)readData[1],
+            (uint8_t)readData[2],
+            (uint8_t)readData[3]); // print all sensor bytes
 
-        humidity = ((readData[0] & 0x3F) << 8) | readData[1]; // Calculate raw humidity
-        ser.printf("Humidity %%: %u\n\r", (humidity * 100 / 16383)); // Print humidity
-        uint16_t rawTemp = ((((uint16_t)(uint8_t)readData[2] << 8) | (uint8_t)readData[3]) >> 2); // Extract the 14-bit temperature value
-        ser.printf("Raw bytes: %02X %02X %02X %02X\n\r", (uint8_t)readData[0], (uint8_t)readData[1], (uint8_t)readData[2], (uint8_t)readData[3]); // Print all sensor bytes
-        float tempC = (rawTemp * 165.0f / 16383.0f) - 40.0f; // Convert raw data to Celsius
-        float tempF = (tempC * 1.8f) + 32.0f; // Convert Celsius to Fahrenheit
-        TOUT = (int16_t)(tempF * 100.0f); // Store Fahrenheit multiplied by 100 for BLE
-        ser.printf("Temperature: %d.%02d F\n\r", TOUT / 100, (TOUT % 100 < 0) ? -(TOUT % 100) : (TOUT % 100)); // Print Fahrenheit with two decimal places
+        float tempC = (rawTemp * 165.0f / 16383.0f) - 40.0f; // convert raw data to Celsius
+        float tempF = (tempC * 1.8f) + 32.0f; // convert Celsius to Fahrenheit
 
+        TOUT = (int16_t)(tempF * 100.0f); // store Fahrenheit multiplied by 100 for BLE
+
+        ser.printf("Temperature: %d.%02d F\r\n",
+            TOUT / 100,
+            (TOUT % 100 < 0) ? -(TOUT % 100) : (TOUT % 100)); // print Fahrenheit with two decimal places
+
+        event_queue.call(update_temperature_characteristic, TOUT); // schedule BLE temperature update
+    
     }
 
 }
@@ -192,6 +242,7 @@ void on_init_complete(BLE::InitializationCompleteCallbackContext *params){
             return; // Stop setup if the service could not be added
         }
 
+        // set up bluetooth advertising
         ble::AdvertisingDataSimpleBuilder<ble::LEGACY_ADVERTISING_MAX_SIZE> builder; // Create the advertising payload builder
         builder.setFlags().setName("Lauren_Lab4"); // Set advertising flags and the Bluetooth device name
 
@@ -224,7 +275,7 @@ int main(){
     i2cbuspull.write(1);
     DigitalOut sensor_pwr(P0_22); // Supply power to all of the sensors (VCC)
     sensor_pwr.write(1);
-	thread_sleep_for(1);
+	thread_sleep_for(1000); // wait for sensor to power up
 
     tempthread.start(measure_temp); // Start reading temperature and humidity in a separate thread
     bleinit.onEventsToProcess(schedule_ble_events);

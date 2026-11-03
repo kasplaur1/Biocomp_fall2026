@@ -1,3 +1,4 @@
+
 /* mbed Microcontroller Library
  * Copyright (c) 2006-2019 ARM Limited
  *
@@ -34,7 +35,7 @@ Thread tempthread;
 static events::EventQueue event_queue(16 * EVENTS_EVENT_SIZE);
 
 // Your BLE instance
-BLE &bleinit= BLE::Instance();
+BLE &bleinit = BLE::Instance();
 // Your GAP instance
 Gap& gap = bleinit.gap();
 // Your GattServer instance
@@ -42,9 +43,10 @@ GattServer& gattServe = bleinit.gattServer();
 // Your GattClient instance
 GattClient& gattClient = bleinit.gattClient();
 
-int16_t TOUT =0;
+int16_t TOUT = 0;
+uint16_t humidityOUT = 0; // LK added - store humidity multiplied by 100 for BLE
 
-//LK added
+// LK added
 ReadOnlyGattCharacteristic<int16_t> temperatureCharacteristic( // Create a read-only temperature characteristic
     UUID(0xA001), // Give the characteristic a custom 16-bit UUID
     &TOUT, // Set the starting temperature value to TOUT
@@ -58,7 +60,25 @@ GattService temperatureService( // Create the Health Thermometer service
     temperatureChars, // Add the temperature characteristic to the service
     sizeof(temperatureChars) / sizeof(temperatureChars[0]) // Calculate the number of characteristics in the service
 );
-//LK done
+// LK done
+
+
+// LK added - humidity BLE
+ReadOnlyGattCharacteristic<uint16_t> humidityCharacteristic( // Create a read-only humidity characteristic
+    UUID(0x2A6F), // Use the standard Bluetooth Relative Humidity characteristic UUID
+    &humidityOUT, // Set the starting humidity value to humidityOUT
+    GattCharacteristic::BLE_GATT_CHAR_PROPERTIES_INDICATE // Allow the phone to subscribe to humidity updates
+);
+
+GattCharacteristic *humidityChars[] = { &humidityCharacteristic }; // Create an array containing the humidity characteristic
+
+GattService humidityService( // Create the Environmental Sensing service
+    UUID(0x181A), // Use the standard Environmental Sensing service UUID
+    humidityChars, // Add the humidity characteristic to the service
+    sizeof(humidityChars) / sizeof(humidityChars[0]) // Calculate the number of characteristics in the service
+);
+// LK done
+
 
 using namespace ble;
 
@@ -66,8 +86,8 @@ using namespace ble;
  * Event handler struct. Handle Bluetooth GAP events LK changed
  */
 struct GapEventHandler : Gap::EventHandler {
-    /* 
-	 * Implement the functions here that you think you'll need. These are defined in the GAP EventHandler:
+    /*
+     * Implement the functions here that you think you'll need. These are defined in the GAP EventHandler:
      * https://os.mbed.com/docs/mbed-os/v6.6/mbed-os-api-doxy/structble_1_1_gap_1_1_event_handler.html
      */
 
@@ -104,7 +124,8 @@ struct GapEventHandler : Gap::EventHandler {
 
 GapEventHandler THE_gap_EvtHandler; // create the event handler object
 
-//LK added
+
+// LK added
 // Update the temperature characteristic through the BLE event queue
 void update_temperature_characteristic(int16_t newTemperature) {
 
@@ -121,70 +142,99 @@ void update_temperature_characteristic(int16_t newTemperature) {
             (newTemperature % 100 < 0) ? -(newTemperature % 100) : (newTemperature % 100)); // print updated BLE temperature
     }
     else {
-        ser.printf("Failed to update BLE characteristic: %d\r\n", result); // print update error
+        ser.printf("Failed to update BLE temperature characteristic: %d\r\n", result); // print update error
     }
 }
 // LK done
 
 
+// LK added - humidity BLE
+// Update the humidity characteristic through the BLE event queue
+void update_humidity_characteristic(uint16_t newHumidity) {
+
+    ble_error_t result = gattServe.write( // update the humidity characteristic in the GATT server
+        humidityCharacteristic.getValueHandle(), // get the humidity characteristic handle
+        reinterpret_cast<const uint8_t*>(&newHumidity), // provide the new humidity value
+        sizeof(newHumidity), // send the humidity value size
+        false // allow subscribed devices to receive indications
+    );
+
+    if (result == BLE_ERROR_NONE) {
+        ser.printf("BLE humidity characteristic updated: %u.%02u %%RH\r\n",
+            newHumidity / 100,
+            newHumidity % 100); // print updated BLE humidity
+    }
+    else {
+        ser.printf("Failed to update BLE humidity characteristic: %d\r\n", result); // print update error
+    }
+}
+// LK done
+
 
 // read the temperature and humidity from the Hs3000 sensor
-void measure_temp(){
+void measure_temp() {
     I2C sensor_bus(I2C_SDA1, I2C_SCL1);
 
     uint8_t subvol_open[] = {0xA0, 0x00, 0x00};
     uint8_t subvol_close[] = {0x80, 0x00, 0x00};
     uint8_t subaddr[] = {0x1E, 0x00, 0x00};
-    int resp=4;
+    int resp = 4;
 
-	const int readaddr = 0x88; // 44, left shifted
-	const int writeaddr = 0x88;
+    const int readaddr = 0x88; // 44, left shifted
+    const int writeaddr = 0x88;
+
     //char readData[] ={0, 0, 0}; original LK changed
     char readData[4] = {0, 0, 0, 0}; // store all 4 bytes returned by HS3000
-    uint16_t upperID =0;
-    uint16_t lowerID =0;
-    uint32_t fullID =0;
-    resp = sensor_bus.write(writeaddr, (const char *) subvol_open, sizeof(subvol_open)/sizeof(subvol_open[0]), false);    
-    if(  resp != 0 ){
-        ser.printf("Darn! I failed to talk at the temp sensor. (Returned: %d)\n\r", resp);            
+
+    uint16_t upperID = 0;
+    uint16_t lowerID = 0;
+    uint32_t fullID = 0;
+
+    resp = sensor_bus.write(writeaddr, (const char *) subvol_open, sizeof(subvol_open) / sizeof(subvol_open[0]), false);
+
+    if (resp != 0) {
+        ser.printf("Darn! I failed to talk at the temp sensor. (Returned: %d)\n\r", resp);
     }
 
-    resp = sensor_bus.write(writeaddr, (const char *) subaddr, sizeof(subaddr)/sizeof(subaddr[0]), true);
-              
-    if( sensor_bus.read(readaddr, readData, 3)  != 0 ){
-        ser.printf("Darn! I failed to listen to the temp sensor.\n\r");        
+    resp = sensor_bus.write(writeaddr, (const char *) subaddr, sizeof(subaddr) / sizeof(subaddr[0]), true);
+
+    if (sensor_bus.read(readaddr, readData, 3) != 0) {
+        ser.printf("Darn! I failed to listen to the temp sensor.\n\r");
     }
-    
-    if( readData[0] != 0x81 ){
+
+    if (readData[0] != 0x81) {
         ser.printf("Upper ID read not Successful.\n\r");
-    }else{        
+    }
+    else {
         upperID = (readData[1] << 8);
         upperID |= readData[2];
         ser.printf("Upper ID is: %d\n\r", upperID);
     }
 
     subaddr[0] = 0x1F;
-    resp = sensor_bus.write(writeaddr, (const char *) subaddr, sizeof(subaddr)/sizeof(subaddr[0]), true);
+    resp = sensor_bus.write(writeaddr, (const char *) subaddr, sizeof(subaddr) / sizeof(subaddr[0]), true);
 
     sensor_bus.read(readaddr, readData, 3);
-    if( readData[0] != 0x81 ){
+
+    if (readData[0] != 0x81) {
         ser.printf("Lower ID read not Successful.\n\r");
-    }else{        
+    }
+    else {
         lowerID = (readData[1] << 8);
         lowerID |= readData[2];
         ser.printf("Lower ID is: %d\n\r", lowerID);
     }
 
-    if( lowerID !=0 && upperID !=0 ){
+    if (lowerID != 0 && upperID != 0) {
         fullID = lowerID;
         fullID |= (upperID << 16);
         ser.printf("ID is: %u\n\r", fullID);
     }
 
-    resp = sensor_bus.write(writeaddr, (const char *) subvol_close, sizeof(subvol_close)/sizeof(subvol_close[0]), false);
+    resp = sensor_bus.write(writeaddr, (const char *) subvol_close, sizeof(subvol_close) / sizeof(subvol_close[0]), false);
 
     int32_t humidity = 0;
-    
+
     while (true) {
         thread_sleep_for(1000); // Wait one second between readings
 
@@ -192,15 +242,28 @@ void measure_temp(){
         thread_sleep_for(35); // Wait for the sensor measurement
 
         resp = sensor_bus.read(readaddr, readData, 4); // Read the 4 sensor bytes
+
         if (resp != 0) {
             ser.printf("Failed to read HS3000 data: %d\n\r", resp);
             continue; // Skip this reading if the I2C read failed
         }
 
         ser.printf("Status bits: %d\r\n", (static_cast<uint8_t>(readData[0]) >> 6)); // print sensor status bits
+
         humidity = ((static_cast<uint8_t>(readData[0]) & 0x3F) << 8) | static_cast<uint8_t>(readData[1]); // calculate raw humidity
+
         ser.printf("Humidity %%: %u\r\n", (humidity * 100 / 16383)); // print humidity percentage
+
+        // LK added - humidity BLE
+        humidityOUT = (uint16_t)(humidity * 10000UL / 16383UL); // convert raw humidity to hundredths of a percent for BLE
+
+        ser.printf("Humidity for BLE: %u.%02u %%RH\r\n",
+            humidityOUT / 100,
+            humidityOUT % 100); // print humidity value being sent over BLE
+        // LK done
+
         uint16_t rawTemp = ((((uint16_t)(uint8_t)readData[2] << 8) | (uint8_t)readData[3]) >> 2); // extract the 14-bit temperature value
+
         ser.printf("Raw bytes: %02X %02X %02X %02X\r\n",
             (uint8_t)readData[0],
             (uint8_t)readData[1],
@@ -217,21 +280,25 @@ void measure_temp(){
             (TOUT % 100 < 0) ? -(TOUT % 100) : (TOUT % 100)); // print Fahrenheit with two decimal places
 
         event_queue.call(update_temperature_characteristic, TOUT); // schedule BLE temperature update
-    
+
+        // LK added - humidity BLE
+        event_queue.call(update_humidity_characteristic, humidityOUT); // schedule BLE humidity update
+        // LK done
     }
 
 }
 
-// LK changed this part: uses callbalc already provided in the startere file
-// Using this to check initialization result and print a message to the seriel terminal
-void on_init_complete(BLE::InitializationCompleteCallbackContext *params){
+
+// LK changed this part: uses callback already provided in the starter file
+// Using this to check initialization result and print a message to the serial terminal
+void on_init_complete(BLE::InitializationCompleteCallbackContext *params) {
     if (params->error == BLE_ERROR_NONE) { // Check if BLE initialized successfully
         ser.printf("BLE initialization successful!\n\r"); // Print a success message
 
         gap.setEventHandler(&THE_gap_EvtHandler); // Register the GAP event handler
 
-        //register the service with Bluetooth 
-        
+        //register the service with Bluetooth
+
         ble_error_t serviceError = gattServe.addService(temperatureService); // Add the temperature service to the Bluetooth server
 
         if (serviceError == BLE_ERROR_NONE) { // Check if the service was added successfully
@@ -241,6 +308,18 @@ void on_init_complete(BLE::InitializationCompleteCallbackContext *params){
             ser.printf("Failed to add temperature service: %d\n\r", serviceError); // Print the error code
             return; // Stop setup if the service could not be added
         }
+
+        // LK added - humidity BLE
+        ble_error_t humidityServiceError = gattServe.addService(humidityService); // Add the humidity service to the Bluetooth server
+
+        if (humidityServiceError == BLE_ERROR_NONE) { // Check if the humidity service was added successfully
+            ser.printf("Humidity service added successfully!\n\r"); // Print a success message
+        }
+        else {
+            ser.printf("Failed to add humidity service: %d\n\r", humidityServiceError); // Print the error code
+            return; // Stop setup if the humidity service could not be added
+        }
+        // LK done
 
         // set up bluetooth advertising
         ble::AdvertisingDataSimpleBuilder<ble::LEGACY_ADVERTISING_MAX_SIZE> builder; // Create the advertising payload builder
@@ -259,27 +338,31 @@ void on_init_complete(BLE::InitializationCompleteCallbackContext *params){
             ser.printf("Failed to start advertising: %d\n\r", error); // Print the error code
         }
     }
-    else{
+    else {
         ser.printf("BLE initialization failed: %d\n\r", params->error);
     }
 }
 
+
 /* Schedule processing of events from the BLE middleware in the event queue. */
-void schedule_ble_events(BLE::OnEventsToProcessCallbackContext *context){
+void schedule_ble_events(BLE::OnEventsToProcessCallbackContext *context) {
     event_queue.call(mbed::Callback<void()>(&context->ble, &BLE::processEvents));
 }
 
 
-int main(){
+int main() {
     DigitalOut i2cbuspull(P1_0); // Pull up i2C. resistor.
     i2cbuspull.write(1);
+
     DigitalOut sensor_pwr(P0_22); // Supply power to all of the sensors (VCC)
     sensor_pwr.write(1);
-	thread_sleep_for(1000); // wait for sensor to power up
+
+    thread_sleep_for(1000); // wait for sensor to power up
 
     tempthread.start(measure_temp); // Start reading temperature and humidity in a separate thread
+
     bleinit.onEventsToProcess(schedule_ble_events);
-   
+
     //lk added. Initialize Bluetooth and call the callback when finished
     bleinit.init(on_init_complete);
 
